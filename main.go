@@ -2,25 +2,38 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 
 	"simple-limiter/limiter"
 )
 
+// getIP extracts the IP address from the request's RemoteAddr (host:port).
+func getIP(r *http.Request) string {
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return ip
+}
+
 func main() {
-	// Bucket holds up to 3 tokens, and refills 1 token every 1 second
-	rl := limiter.New(3, 1*time.Second)
+	// Each IP gets 3 burst tokens, refilling 1 token every 2 seconds
+	ipLimiter := limiter.NewIPRateLimiter(3, 2*time.Second)
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if !rl.Allow() {
+		clientIP := getIP(r)
+
+		if !ipLimiter.Allow(clientIP) {
 			http.Error(w, "429 Too Many Requests", http.StatusTooManyRequests)
 			return
 		}
-		fmt.Fprintln(w, "Request successful!")
+
+		fmt.Fprintf(w, "Request successful for IP: %s\n", clientIP)
 	})
 
-	fmt.Println("Server running on :8080 (Limit: 3 burst, 1 req/sec refill)")
+	fmt.Println("Server running on :8080 (Per-IP limit: 3 burst, 1 token/2s refill)")
 	if err := http.ListenAndServe(":8080", nil); err != nil {
 		fmt.Println("Server failed:", err)
 	}

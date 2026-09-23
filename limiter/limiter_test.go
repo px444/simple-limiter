@@ -6,50 +6,44 @@ import (
 	"time"
 )
 
-// TestBurstLimit ensures we can consume up to capacity, and the next call fails.
+// TestBurstLimit ensures a bucket consumes up to capacity, and the next call fails.
 func TestBurstLimit(t *testing.T) {
 	capacity := 3
-	rl := New(capacity, 1*time.Second)
+	bucket := newBucket(capacity, 1*time.Second)
 
-	// Consume all 3 burst tokens
 	for i := 0; i < capacity; i++ {
-		if !rl.Allow() {
+		if !bucket.Allow() {
 			t.Fatalf("expected request %d to be allowed", i+1)
 		}
 	}
 
-	// 4th request must be rejected
-	if rl.Allow() {
+	if bucket.Allow() {
 		t.Fatal("expected 4th request to be blocked by rate limiter")
 	}
 }
 
 // TestRefill ensures tokens regenerate correctly over time.
 func TestRefill(t *testing.T) {
-	rl := New(1, 100*time.Millisecond)
+	bucket := newBucket(1, 100*time.Millisecond)
 
-	// Consume the single token
-	if !rl.Allow() {
+	if !bucket.Allow() {
 		t.Fatal("expected first request to pass")
 	}
 
-	// Immediate next request should fail
-	if rl.Allow() {
+	if bucket.Allow() {
 		t.Fatal("expected immediate second request to fail")
 	}
 
-	// Wait for refill interval
 	time.Sleep(110 * time.Millisecond)
 
-	// Token should now be restored
-	if !rl.Allow() {
+	if !bucket.Allow() {
 		t.Fatal("expected request to pass after refill interval")
 	}
 }
 
-// TestConcurrentAccess launches multiple goroutines to test mutex thread-safety.
+// TestConcurrentAccess verifies mutex thread safety under concurrent goroutines.
 func TestConcurrentAccess(t *testing.T) {
-	rl := New(10, 100*time.Millisecond)
+	bucket := newBucket(10, 100*time.Millisecond)
 	var wg sync.WaitGroup
 
 	numGoroutines := 50
@@ -58,10 +52,36 @@ func TestConcurrentAccess(t *testing.T) {
 	for i := 0; i < numGoroutines; i++ {
 		go func() {
 			defer wg.Done()
-			// Calling Allow() concurrently must not panic or cause a data race
-			_ = rl.Allow()
+			_ = bucket.Allow()
 		}()
 	}
 
 	wg.Wait()
+}
+
+// TestIPRateLimiterIsolation verifies one IP's burst does not impact another IP.
+func TestIPRateLimiterIsolation(t *testing.T) {
+	ipLimiter := NewIPRateLimiter(2, 1*time.Second)
+
+	ipA := "192.168.1.1"
+	ipB := "192.168.1.2"
+
+	// Exhaust tokens for IP A
+	if !ipLimiter.Allow(ipA) {
+		t.Fatal("expected IP A request 1 to pass")
+	}
+	if !ipLimiter.Allow(ipA) {
+		t.Fatal("expected IP A request 2 to pass")
+	}
+	if ipLimiter.Allow(ipA) {
+		t.Fatal("expected IP A request 3 to be blocked")
+	}
+
+	// IP B should still have all tokens available
+	if !ipLimiter.Allow(ipB) {
+		t.Fatal("expected IP B request 1 to pass despite IP A being blocked")
+	}
+	if !ipLimiter.Allow(ipB) {
+		t.Fatal("expected IP B request 2 to pass")
+	}
 }
